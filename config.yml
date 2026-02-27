@@ -1,0 +1,19 @@
+defaults:
+  snmp_version: "v2c"
+  timeout_s: 2.5
+  retries: 1
+  target_budget_s: 10
+  oids:
+    - "sysUpTime.0"
+    - "sysName.0"
+
+targets:
+  - name: "router1"
+    ip: "172.16.0.251"
+    community: "public"
+    oids:
+      - "ifOperStatus.1"
+
+  - name: "router2"
+    ip: "172.16.0.235"
+    community: "public"
