@@ -1,0 +1,271 @@
+# Import different modules that the program needs
+
+import yaml        # used to read the config.yml file
+import subprocess  # used to run the snmpget command
+import time        # used to measure runtime
+import json        # used to write the result to a JSON file
+import sys         # used for program exit codes
+import logging     # used for log messages
+import argparse    # used to read CLI arguments
+
+# Configure logging output in the terminal
+# INFO shows normal messages, WARNING and ERROR show problems
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s"
+)
+
+# Reads the YAML config file and converts it to a Python dictionary
+# Input: filename (path to config.yml)
+# Output: config dictionary with defaults and targets
+def load_config(filename):
+
+    # open the config file
+    with open(filename) as f:
+
+        # convert YAML to Python dictionary
+        config = yaml.safe_load(f)
+
+    # return the config dictionary
+    return config
+
+# Checks that the config file contains the required fields
+# If something important is missing the program stops
+# Input: config dictionary
+# Output: none (raises error if config is invalid)
+def validate_config(config):
+
+    # config must contain defaults
+    if "defaults" not in config:
+        raise ValueError("Missing defaults")
+
+    # config must contain targets
+    if "targets" not in config:
+        raise ValueError("Missing targets")
+
+    # targets must be a list with at least one entry
+    if not isinstance(config["targets"], list) or len(config["targets"]) == 0:
+        raise ValueError("targets must be a non-empty list")
+
+    defaults = config["defaults"]
+
+    # check that timeout exists
+    if "timeout_s" not in defaults:
+        raise ValueError("Missing defaults.timeout_s")
+
+    # timeout must be numeric
+    if not isinstance(defaults["timeout_s"], (int, float)):
+        raise ValueError("timeout_s must be numeric")
+
+    # check that target time budget exists
+    if "target_budget_s" not in defaults:
+        raise ValueError("Missing defaults.target_budget_s")
+
+    # check that OIDs exist
+    if "oids" not in defaults:
+        raise ValueError("Missing defaults.oids")
+
+    # validate each target entry
+    for target in config["targets"]:
+
+        # every target must have a name
+        if "name" not in target:
+            raise ValueError("Target missing name")
+
+        # every target must have an IP address
+        if "ip" not in target:
+            raise ValueError("Target missing ip")
+
+        # every target must have a community string
+        if "community" not in target:
+            raise ValueError("Target missing community")
+
+# Runs the snmpget command to retrieve SNMP data from a device
+# Input: ip address, community string, oid, timeout
+# Output: SNMP response text, error text, or "timeout"
+def get_snmp(ip, community, oid, timeout_s):
+
+    try:
+
+        # run the snmpget command
+        result = subprocess.run(
+            ["snmpget", "-v2c", "-c", community, ip, oid],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s
+        )
+
+        # if successful return the SNMP output
+        if result.returncode == 0:
+            return result.stdout
+
+        # otherwise return the error message
+        return result.stderr
+
+    # if the device does not respond in time
+    except subprocess.TimeoutExpired:
+
+        logging.warning("Timeout, retrying: %s %s", ip, oid)
+
+        try:
+
+            # retry the SNMP request once
+            result = subprocess.run(
+                ["snmpget", "-v2c", "-c", community, ip, oid],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s
+            )
+
+            if result.returncode == 0:
+                return result.stdout
+
+            return result.stderr
+
+        except subprocess.TimeoutExpired:
+
+            # if it times out again return timeout
+            logging.error("Timeout again: %s %s", ip, oid)
+            return "timeout"
+
+# Main function that runs the whole poller
+# It loads the config, polls all targets, and saves the result
+def main():
+
+    # define CLI arguments 
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--out", required=True)
+
+    args = parser.parse_args()
+
+    # load and validate configuration
+    try:
+        config = load_config(args.config)
+        validate_config(config)
+
+    except Exception as e:
+
+        logging.error("Config error: %s", e)
+        sys.exit(2)
+
+    # read default values from config
+    timeout_s = config["defaults"]["timeout_s"]
+    budget_s = config["defaults"]["target_budget_s"]
+
+    results = []
+
+    logging.info("Run start")
+
+    # start time for total runtime
+    run_start = time.time()
+
+    # loop through all targets in the config
+    for target in config["targets"]:
+
+        logging.info("Target start: %s", target["name"])
+
+        start = time.time()
+
+        # structure where results for this target are stored
+        target_result = {
+            "name": target["name"],
+            "ip": target["ip"],
+            "results": {}
+        }
+
+        ok_count = 0
+        fail_count = 0
+
+        # use target OIDs if defined, otherwise use default OIDs
+        oids = target.get("oids", config["defaults"]["oids"])
+
+        # loop through each OID
+        for oid in oids:
+
+            # stop if time budget for this target is exceeded
+            if time.time() - start > budget_s:
+
+                logging.warning("Time budget exceeded for %s", target["name"])
+                break
+
+            # run SNMP query
+            output = get_snmp(
+                target["ip"],
+                target["community"],
+                oid,
+                timeout_s
+            )
+
+            # store result
+            target_result["results"][oid] = output
+
+            # count successful and failed OIDs
+            if output == "timeout" or "ERROR" in output:
+
+                fail_count += 1
+                logging.error("Failed: %s %s", target["name"], oid)
+
+            else:
+
+                ok_count += 1
+
+        # determine the status for the target
+        if fail_count == 0:
+            status = "ok"
+        elif ok_count == 0:
+            status = "failed"
+        else:
+            status = "partial"
+
+        target_result["status"] = status
+        target_result["ok_count"] = ok_count
+        target_result["fail_count"] = fail_count
+
+        # runtime for this target
+        target_result["runtime"] = time.time() - start
+
+        results.append(target_result)
+
+        logging.info("Target end: %s (%s)", target["name"], status)
+
+    # build final JSON output
+    output = {
+        "run": {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "config": args.config,
+            "duration": time.time() - run_start
+        },
+        "targets": results
+    }
+
+    # write results to JSON file
+    with open(args.out, "w") as f:
+        json.dump(output, f, indent=2)
+
+    logging.info("Saved to %s", args.out)
+
+    # determine exit code based on results
+    all_ok = True
+    any_success = False
+
+    for t in results:
+
+        if t["status"] != "ok":
+            all_ok = False
+
+        if t["status"] != "failed":
+            any_success = True
+
+    if all_ok:
+        sys.exit(0)
+    elif any_success:
+        sys.exit(1)
+    else:
+        sys.exit(2)
+
+# start the program
+if __name__ == "__main__":
+    main()
+
