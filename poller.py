@@ -83,33 +83,14 @@ def validate_config(config):
 # Runs the snmpget command to retrieve SNMP data from a device
 # Input: ip address, community string, oid, timeout
 # Output: SNMP response text, error text, or "timeout"
-def get_snmp(ip, community, oid, timeout_s):
+def get_snmp(ip, community, oid, timeout_s, retries):
 
-    try:
-
-        # run the snmpget command
-        result = subprocess.run(
-            ["snmpget", "-v2c", "-c", community, ip, oid],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s
-        )
-
-        # if successful return the SNMP output
-        if result.returncode == 0:
-            return result.stdout
-
-        # otherwise return the error message
-        return result.stderr
-
-    # if the device does not respond in time
-    except subprocess.TimeoutExpired:
-
-        logging.warning("Timeout, retrying: %s %s", ip, oid)
+    # attempt the SNMP request and retry on timeout
+    for attempt in range(retries + 1):
 
         try:
 
-            # retry the SNMP request once
+            # run the snmpget command
             result = subprocess.run(
                 ["snmpget", "-v2c", "-c", community, ip, oid],
                 capture_output=True,
@@ -117,16 +98,25 @@ def get_snmp(ip, community, oid, timeout_s):
                 timeout=timeout_s
             )
 
+            # if successful return the SNMP output
             if result.returncode == 0:
                 return result.stdout
 
+            # otherwise return the error message
             return result.stderr
 
+        # if the device does not respond in time
         except subprocess.TimeoutExpired:
 
-            # if it times out again return timeout
-            logging.error("Timeout again: %s %s", ip, oid)
-            return "timeout"
+            if attempt < retries:
+
+                logging.warning("Timeout, retrying: %s %s", ip, oid)
+
+            else:
+
+                # if all retries fail return timeout
+                logging.error("Timeout again: %s %s", ip, oid)
+                return "timeout"
 
 # Main function that runs the whole poller
 # It loads the config, polls all targets, and saves the result
@@ -153,6 +143,7 @@ def main():
     # read default values from config
     timeout_s = config["defaults"]["timeout_s"]
     budget_s = config["defaults"]["target_budget_s"]
+    retries = config["defaults"].get("retries", 1)
 
     results = []
 
@@ -195,7 +186,8 @@ def main():
                 target["ip"],
                 target["community"],
                 oid,
-                timeout_s
+                timeout_s,
+                retries
             )
 
             # store result
@@ -268,4 +260,3 @@ def main():
 # start the program
 if __name__ == "__main__":
     main()
-
