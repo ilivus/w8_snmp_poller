@@ -6,6 +6,7 @@ defaults:
   oids:
     - "sysUpTime.0"
     - "sysName.0"
+    - "sysDescr.0"
 
 targets:
   - name: "router1"
