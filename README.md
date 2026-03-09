@@ -172,19 +172,6 @@ Controls which log messages are shown in the terminal.
 
 The program polls the devices defined in `config.yml` and saves the results to the selected output destination.
 
-### Example log output
-
-```text
-INFO: Starting poll run: 2 targets, output=out.json
-INFO: Polling target router1 (10.0.0.1)
-WARNING: Timeout, retrying: 10.0.0.1 sysName.0
-INFO: Finished target router1 with status=partial in 2.61s
-INFO: Polling target router2 (10.0.0.2)
-ERROR: Failed: router2 sysUpTime.0
-INFO: Finished target router2 with status=failed in 2.50s
-INFO: Saved to out.json
-```
-
 ### Exit codes
 
 `0` – all targets successful  
