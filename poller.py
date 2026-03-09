@@ -1,5 +1,3 @@
-# Import different modules that the program needs
-
 import yaml        # used to read the config.yml file
 import subprocess  # used to run the snmpget command
 import time        # used to measure runtime
@@ -7,13 +5,6 @@ import json        # used to write the result to a JSON file
 import sys         # used for program exit codes
 import logging     # used for log messages
 import argparse    # used to read CLI arguments
-
-# Configure logging output in the terminal
-# INFO shows normal messages, WARNING and ERROR show problems
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s"
-)
 
 # Reads the YAML config file and converts it to a Python dictionary
 # Input: filename (path to config.yml)
@@ -65,6 +56,10 @@ def validate_config(config):
     if "oids" not in defaults:
         raise ValueError("Missing defaults.oids")
 
+    # retries should be numeric if present
+    if "retries" in defaults and not isinstance(defaults["retries"], int):
+        raise ValueError("retries must be an integer")
+
     # validate each target entry
     for target in config["targets"]:
 
@@ -100,35 +95,50 @@ def get_snmp(ip, community, oid, timeout_s, retries):
 
             # if successful return the SNMP output
             if result.returncode == 0:
-                return result.stdout
+                return result.stdout.strip()
 
             # otherwise return the error message
-            return result.stderr
+            return result.stderr.strip()
 
         # if the device does not respond in time
         except subprocess.TimeoutExpired:
 
             if attempt < retries:
 
-                logging.warning("Timeout, retrying: %s %s", ip, oid)
+                # warning logs include more detail than info logs
+                logging.warning("event=timeout ip=%s oid=%s attempt=%d/%d timeout_s=%s action=retrying", ip, oid, attempt + 1, retries + 1, timeout_s)
 
             else:
 
                 # if all retries fail return timeout
-                logging.error("Timeout again: %s %s", ip, oid)
+                logging.error("event=timeout_final ip=%s oid=%s timeout_s=%s", ip, oid, timeout_s)
                 return "timeout"
 
 # Main function that runs the whole poller
 # It loads the config, polls all targets, and saves the result
 def main():
 
-    # define CLI arguments 
+    # define CLI arguments
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--config", required=True)
     parser.add_argument("--out", required=True)
 
+    # extra argument so the user can choose which log level to show
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["INFO", "WARNING", "ERROR"]
+    )
+
     args = parser.parse_args()
+
+    # configure logging after reading CLI arguments
+    # asctime adds date and time to each log line
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     # load and validate configuration
     try:
@@ -137,7 +147,7 @@ def main():
 
     except Exception as e:
 
-        logging.error("Config error: %s", e)
+        logging.error("event=config_error message=%s", e)
         sys.exit(2)
 
     # read default values from config
@@ -147,7 +157,8 @@ def main():
 
     results = []
 
-    logging.info("Run start")
+    # short info log for normal program start
+    logging.info("Starting poller, %d targets", len(config["targets"]))
 
     # start time for total runtime
     run_start = time.time()
@@ -155,7 +166,7 @@ def main():
     # loop through all targets in the config
     for target in config["targets"]:
 
-        logging.info("Target start: %s", target["name"])
+        logging.info("Polling %s (%s)", target["name"], target["ip"])
 
         start = time.time()
 
@@ -178,7 +189,8 @@ def main():
             # stop if time budget for this target is exceeded
             if time.time() - start > budget_s:
 
-                logging.warning("Time budget exceeded for %s", target["name"])
+                # warning log for budget problems
+                logging.warning("event=budget_exceeded target=%s ip=%s budget_s=%s timeout_s=%s retries=%s", target["name"], target["ip"], budget_s, timeout_s, retries)
                 break
 
             # run SNMP query
@@ -194,10 +206,11 @@ def main():
             target_result["results"][oid] = output
 
             # count successful and failed OIDs
-            if output == "timeout" or "ERROR" in output:
+            # keep the check simple: timeout or clear error text means failure
+            if output == "timeout" or "ERROR" in output.upper() or "TIMEOUT" in output.upper():
 
                 fail_count += 1
-                logging.error("Failed: %s %s", target["name"], oid)
+                logging.error("event=oid_failed target=%s ip=%s oid=%s output=%s", target["name"], target["ip"], oid, output)
 
             else:
 
@@ -220,8 +233,6 @@ def main():
 
         results.append(target_result)
 
-        logging.info("Target end: %s (%s)", target["name"], status)
-
     # build final JSON output
     output = {
         "run": {
@@ -233,10 +244,13 @@ def main():
     }
 
     # write results to JSON file
-    with open(args.out, "w") as f:
-        json.dump(output, f, indent=2)
-
-    logging.info("Saved to %s", args.out)
+    # if --out - is used, print JSON to stdout instead of writing a file
+    if args.out == "-":
+        json.dump(output, sys.stdout, indent=2)
+        print()
+    else:
+        with open(args.out, "w") as f:
+            json.dump(output, f, indent=2)
 
     # determine exit code based on results
     all_ok = True
