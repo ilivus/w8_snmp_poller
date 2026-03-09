@@ -189,6 +189,12 @@ def main():
             # stop if time budget for this target is exceeded
             if time.time() - start > budget_s:
 
+                # save budget exceeded for the remaining OID
+                target_result["results"][oid] = "budget_exceeded"
+
+                # count it as a failed OID
+                fail_count += 1
+
                 # warning log for budget problems
                 logging.warning("Time budget exceeded for %s (%s) after %ss", target["name"], target["ip"], budget_s)
                 break
