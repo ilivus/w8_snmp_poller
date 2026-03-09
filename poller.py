@@ -12,7 +12,7 @@ import argparse    # used to read CLI arguments
 # INFO shows normal messages, WARNING and ERROR show problems
 logging.basicConfig(
     level=logging.INFO,
-    format="%(levelname)s: %(message)s"
+    format="%(message)s"
 )
 
 # Reads the YAML config file and converts it to a Python dictionary
