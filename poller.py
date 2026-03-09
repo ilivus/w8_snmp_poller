@@ -105,13 +105,13 @@ def get_snmp(ip, community, oid, timeout_s, retries):
 
             if attempt < retries:
 
-                # warning logs include more detail than info logs
-                logging.warning("event=timeout ip=%s oid=%s attempt=%d/%d timeout_s=%s action=retrying", ip, oid, attempt + 1, retries + 1, timeout_s)
+                # warning messages show timeout and retry number
+                logging.warning("Timeout on %s %s, retry %d/%d", ip, oid, attempt + 1, retries + 1)
 
             else:
 
                 # if all retries fail return timeout
-                logging.error("event=timeout_final ip=%s oid=%s timeout_s=%s", ip, oid, timeout_s)
+                logging.error("Final timeout on %s %s after %ss", ip, oid, timeout_s)
                 return "timeout"
 
 # Main function that runs the whole poller
@@ -147,7 +147,7 @@ def main():
 
     except Exception as e:
 
-        logging.error("event=config_error message=%s", e)
+        logging.error("Config error: %s", e)
         sys.exit(2)
 
     # read default values from config
@@ -190,7 +190,7 @@ def main():
             if time.time() - start > budget_s:
 
                 # warning log for budget problems
-                logging.warning("event=budget_exceeded target=%s ip=%s budget_s=%s timeout_s=%s retries=%s", target["name"], target["ip"], budget_s, timeout_s, retries)
+                logging.warning("Time budget exceeded for %s (%s) after %ss", target["name"], target["ip"], budget_s)
                 break
 
             # run SNMP query
@@ -210,7 +210,7 @@ def main():
             if output == "timeout" or "ERROR" in output.upper() or "TIMEOUT" in output.upper():
 
                 fail_count += 1
-                logging.error("event=oid_failed target=%s ip=%s oid=%s output=%s", target["name"], target["ip"], oid, output)
+                logging.error("Failed %s (%s) %s: %s", target["name"], target["ip"], oid, output)
 
             else:
 
@@ -251,6 +251,10 @@ def main():
     else:
         with open(args.out, "w") as f:
             json.dump(output, f, indent=2)
+
+    # only show this when results are written to a file
+    if args.out != "-":
+        logging.info("Saved results to %s", args.out)
 
     # determine exit code based on results
     all_ok = True
