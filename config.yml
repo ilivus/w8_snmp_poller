@@ -8,12 +8,20 @@ defaults:
     - "sysName.0"
 
 targets:
-  - name: "router1"
+  - name: "Linn"
     ip: "172.16.0.251"
     community: "public"
     oids:
       - "ifOperStatus.1"
 
-  - name: "router2"
+  - name: "Katarina"
+    ip: "172.16.0.250"
+    community: "public"
+
+  - name: "Stina"
     ip: "172.16.0.235"
+    community: "public"
+
+  - name: "Lisa"
+    ip: "172.16.0.220"
     community: "public"
