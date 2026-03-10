@@ -78,7 +78,7 @@ def validate_config(config):
 # Runs the snmpget command to retrieve SNMP data from a device
 # Input: ip address, community string, oid, timeout
 # Output: SNMP response text, error text, or "timeout"
-def get_snmp(ip, community, oid, timeout_s, retries):
+def get_snmp(ip, community, oid, timeout_s, retries, target_name):
 
     # attempt the SNMP request and retry on timeout
     for attempt in range(retries + 1):
@@ -105,13 +105,26 @@ def get_snmp(ip, community, oid, timeout_s, retries):
 
             if attempt < retries:
 
-                # warning messages show timeout and retry number
-                logging.warning("Timeout on %s %s, retry %d/%d", ip, oid, attempt + 1, retries + 1)
+                # warning messages show which target timed out and which retry is used
+                logging.warning(
+                    "Timeout while polling %s (%s), oid=%s, retry %d/%d",
+                    target_name,
+                    ip,
+                    oid,
+                    attempt + 1,
+                    retries + 1
+                )
 
             else:
 
                 # if all retries fail return timeout
-                logging.error("Final timeout on %s %s after %ss", ip, oid, timeout_s)
+                logging.error(
+                    "Final timeout while polling %s (%s), oid=%s, waited %ss",
+                    target_name,
+                    ip,
+                    oid,
+                    timeout_s
+                )
                 return "timeout"
 
 # Main function that runs the whole poller
@@ -147,7 +160,7 @@ def main():
 
     except Exception as e:
 
-        logging.error("Config error: %s", e)
+        logging.error("Configuration error: %s", e)
         sys.exit(2)
 
     # read default values from config
@@ -196,7 +209,13 @@ def main():
                 fail_count += 1
 
                 # warning log for budget problems
-                logging.warning("Time budget exceeded for %s (%s) after %ss", target["name"], target["ip"], budget_s)
+                logging.warning(
+                    "Time budget exceeded for %s (%s) after %ss, remaining oid=%s was skipped",
+                    target["name"],
+                    target["ip"],
+                    budget_s,
+                    oid
+                )
                 break
 
             # run SNMP query
@@ -205,7 +224,8 @@ def main():
                 target["community"],
                 oid,
                 timeout_s,
-                retries
+                retries,
+                target["name"]
             )
 
             # store result
@@ -216,7 +236,15 @@ def main():
             if output == "timeout" or "ERROR" in output.upper() or "TIMEOUT" in output.upper():
 
                 fail_count += 1
-                logging.error("Failed %s (%s) %s: %s", target["name"], target["ip"], oid, output)
+
+                # error log shows which target, oid and returned error text
+                logging.error(
+                    "Polling failed for %s (%s), oid=%s, error=%s",
+                    target["name"],
+                    target["ip"],
+                    oid,
+                    output
+                )
 
             else:
 
